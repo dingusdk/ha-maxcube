@@ -22,13 +22,24 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_PORT = 62910
 DOMAIN = 'maxcube'
 
-MAXCUBE_HANDLE = 'maxcube'
+DATA_KEY = 'maxcube'
+
+NOTIFICATION_ID = 'maxcube_notification'
+NOTIFICATION_TITLE = 'Max!Cube gateway setup'
+
+CONF_GATEWAYS = 'gateways'
+CONF_UPDATE_INTERVAL = 'update_interval'
+
+CONFIG_GATEWAY = vol.Schema({
+    vol.Required(CONF_HOST): cv.string,
+    vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
+    vol.Optional(CONF_UPDATE_INTERVAL, default=300): cv.positive_int,
+})
 
 CONFIG_SCHEMA = vol.Schema({
     DOMAIN: vol.Schema({
-        vol.Required(CONF_HOST): cv.string,
-        vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-        vol.Optional('update_interval', default=300): cv.positive_int,
+        vol.Required(CONF_GATEWAYS, default={}):
+            vol.All(cv.ensure_list, [CONFIG_GATEWAY])
     }),
 }, extra=vol.ALLOW_EXTRA)
 
@@ -37,19 +48,31 @@ def setup(hass, config):
     """Establish connection to MAX! Cube."""
     from maxcube.connection import MaxCubeConnection
     from maxcube.cube import MaxCube
+    if DATA_KEY not in hass.data:
+        hass.data[DATA_KEY] = {}
 
-    host = config.get(DOMAIN).get(CONF_HOST)
-    port = config.get(DOMAIN).get(CONF_PORT)
-    update_interval = config.get(DOMAIN).get('update_interval')
+    connection_failed = 0
+    gateways = config[DOMAIN][CONF_GATEWAYS]
+    for gateway in gateways:
+        host = gateway[CONF_HOST]
+        port = gateway[CONF_PORT]
+        update_interval = gateway[CONF_UPDATE_INTERVAL]
 
-    try:
-        cube = MaxCube(MaxCubeConnection(host, port))
-    except timeout:
-        _LOGGER.error("Connection to Max!Cube could not be established")
-        cube = None
+        try:
+            cube = MaxCube(MaxCubeConnection(host, port))
+            hass.data[DATA_KEY][host] = MaxCubeHandle(cube, update_interval)
+        except timeout as ex:
+            _LOGGER.error("Unable to connect to Max!Cube gateway: %s", str(ex))
+            hass.components.persistent_notification.create(
+                'Error: {}<br />'
+                'You will need to restart Home Assistant after fixing.'
+                ''.format(ex),
+                title=NOTIFICATION_TITLE,
+                notification_id=NOTIFICATION_ID)
+            connection_failed += 1
+
+    if connection_failed >= len(gateways):
         return False
-
-    hass.data[MAXCUBE_HANDLE] = MaxCubeHandle(cube, update_interval)
 
     load_platform(hass, 'climate', DOMAIN)
     load_platform(hass, 'binary_sensor', DOMAIN)
@@ -63,15 +86,15 @@ class MaxCubeHandle(object):
     def __init__(self, cube, update_interval):
         """Initialize the Cube Handle."""
         self.cube = cube
-        self.mutex = Lock()
         self.update_interval = update_interval
+        self.mutex = Lock()
         self._updatets = time.time()
 
     def update(self):
         """Pull the latest data from the MAX! Cube."""
         # Acquire mutex to prevent simultaneous update from multiple threads
         with self.mutex:
-            # Only update every 60s
+            # Only update every update_interval
             if (time.time() - self._updatets) >= self.update_interval:
                 _LOGGER.debug("Updating")
 
