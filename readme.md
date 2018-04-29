@@ -1,3 +1,8 @@
+# READ FIRST
+
+I have made a pull request with this code, so when it has been merged into HA you should remove this custom component again.
+
+---
 
 Here you can read about my current problem with the maxcube in HA:
 
